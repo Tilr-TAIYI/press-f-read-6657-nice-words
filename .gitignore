@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.vs/
+*.user
+.dotnet/
+.dotnet-home/
+.appdata/
+release/*.pdb
+error/
