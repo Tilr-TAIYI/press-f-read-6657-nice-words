@@ -7,3 +7,4 @@
 .appdata/
 release/*.pdb
 error/
+.certs/
