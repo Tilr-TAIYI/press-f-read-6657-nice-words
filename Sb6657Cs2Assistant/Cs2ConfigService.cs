@@ -56,8 +56,7 @@ public sealed class Cs2ConfigService
             EnsureManagedOrMissing(Path.Combine(CfgDirectory, SendCfgName));
             BackupFilesOnce();
 
-            if (!string.IsNullOrWhiteSpace(_settings.BoundKey) && !newKey.Equals(_settings.BoundKey, StringComparison.OrdinalIgnoreCase))
-                RestoreStoredBindings(files, _settings.BoundKey);
+            RestoreOrphanedManagedBindings(files, newKey);
 
             if (!newKey.Equals(_settings.BoundKey, StringComparison.OrdinalIgnoreCase))
             {
@@ -133,7 +132,7 @@ public sealed class Cs2ConfigService
 
         try
         {
-            if (!string.IsNullOrWhiteSpace(_settings.BoundKey)) RestoreStoredBindings(files, _settings.BoundKey);
+            RestoreOrphanedManagedBindings(files, keepKey: null);
             foreach (var path in managed) DeleteOnlyManagedFile(path);
             RemoveAutoexecMarker();
             _settings.BoundKey = "";
@@ -160,6 +159,44 @@ public sealed class Cs2ConfigService
             else
                 RestoreBinding(file, key, _settings.OriginalBindingCommand, _settings.OriginalBindingExisted);
         }
+    }
+
+    private void RestoreOrphanedManagedBindings(IReadOnlyList<string> files, string? keepKey)
+    {
+        var expected = $"exec {Path.GetFileNameWithoutExtension(SendCfgName)}";
+        foreach (var file in files)
+        {
+            foreach (var key in FindBindingsWithCommand(file, expected))
+            {
+                if (key.Equals(keepKey, StringComparison.OrdinalIgnoreCase)) continue;
+                BindingSnapshot? snapshot = null;
+                if (key.Equals(_settings.BoundKey, StringComparison.OrdinalIgnoreCase) &&
+                    _settings.OriginalBindings.TryGetValue(Path.GetFullPath(file), out var stored))
+                    snapshot = stored;
+                snapshot ??= ReadInitialBackupBinding(file, key);
+                if (snapshot is null)
+                    throw new InvalidOperationException($"发现遗留绑定 {key}，但找不到其初始备份，已拒绝覆盖");
+                RestoreBinding(file, key, snapshot.Command, snapshot.Existed);
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> FindBindingsWithCommand(string file, string command)
+    {
+        var matches = Regex.Matches(
+            File.ReadAllText(file),
+            "(?m)^[ \\t]*\\\"(?<key>[^\\\"]+)\\\"[ \\t]+\\\"" + Regex.Escape(command) + "\\\"[ \\t]*\\r?$",
+            RegexOptions.IgnoreCase);
+        return matches.Select(x => x.Groups["key"].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private BindingSnapshot? ReadInitialBackupBinding(string userKeyFile, string key)
+    {
+        var prefix = userKeyFile.Contains("remote", StringComparison.OrdinalIgnoreCase) ? "remote_" : "local_";
+        var backup = Path.Combine(_store.DirectoryPath, "backups", prefix + Path.GetFileName(userKeyFile) + ".original.bak");
+        if (!File.Exists(backup)) return null;
+        var original = ReadBinding(backup, key);
+        return new BindingSnapshot(original.Existed, original.Command);
     }
 
     private void BackupFilesOnce()
@@ -200,14 +237,14 @@ public sealed class Cs2ConfigService
 
     private static (bool Existed, string? Command) ReadBinding(string file, string key)
     {
-        var match = Regex.Match(File.ReadAllText(file), $"(?m)^\\s*\\\"{Regex.Escape(key)}\\\"\\s+\\\"(?<cmd>[^\\\"]*)\\\"", RegexOptions.IgnoreCase);
+        var match = Regex.Match(File.ReadAllText(file), $"(?m)^[ \\t]*\\\"{Regex.Escape(key)}\\\"[ \\t]+\\\"(?<cmd>[^\\\"]*)\\\"", RegexOptions.IgnoreCase);
         return match.Success ? (true, match.Groups["cmd"].Value) : (false, null);
     }
 
     private static void SetBinding(string file, string key, string command)
     {
         var text = File.ReadAllText(file);
-        var pattern = $"(?m)^(?<indent>\\s*)\\\"{Regex.Escape(key)}\\\"\\s+\\\"[^\\\"]*\\\"";
+        var pattern = $"(?m)^(?<indent>[ \\t]*)\\\"{Regex.Escape(key)}\\\"[ \\t]+\\\"[^\\\"]*\\\"";
         if (Regex.IsMatch(text, pattern, RegexOptions.IgnoreCase))
             text = Regex.Replace(text, pattern, $"${{indent}}\"{key}\"\t\t\"{command}\"", RegexOptions.IgnoreCase);
         else
@@ -225,7 +262,7 @@ public sealed class Cs2ConfigService
         if (existed) SetBinding(file, key, command ?? "<unbound>");
         else
         {
-            var text = Regex.Replace(File.ReadAllText(file), $"(?m)^\\s*\\\"{Regex.Escape(key)}\\\"\\s+\\\"[^\\\"]*\\\"\\r?\\n?", "", RegexOptions.IgnoreCase);
+            var text = Regex.Replace(File.ReadAllText(file), $"(?m)^[ \\t]*\\\"{Regex.Escape(key)}\\\"[ \\t]+\\\"[^\\\"]*\\\"[ \\t]*\\r?\\n?", "", RegexOptions.IgnoreCase);
             AtomicWrite(file, text);
         }
     }

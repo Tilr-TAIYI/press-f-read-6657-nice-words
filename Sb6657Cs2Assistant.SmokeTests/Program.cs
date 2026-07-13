@@ -13,8 +13,8 @@ try
     Directory.CreateDirectory(cfg);
     Directory.CreateDirectory(Path.Combine(cs2, "game", "bin", "win64"));
     File.WriteAllText(Path.Combine(cs2, "game", "bin", "win64", "cs2.exe"), "test");
-    const string vcfg = "\"config\"\n{\n\t\"bindings\"\n\t{\n\t\t\"F10\"\t\t\"cs_quit_prompt\"\n\t}\n\t\"analogbindings\"\n\t{\n\t}\n}\n";
-    const string remoteVcfg = "\"config\"\n{\n\t\"bindings\"\n\t{\n\t\t\"F10\"\t\t\"remote_quit\"\n\t}\n\t\"analogbindings\"\n\t{\n\t}\n}\n";
+    const string vcfg = "\"config\"\n{\n\t\"bindings\"\n\t{\n\t\t\"T\"\t\t\"toggleradarscale\"\n\t\t\"F7\"\t\t\"load quick\"\n\t\t\"F10\"\t\t\"cs_quit_prompt\"\n\t}\n\t\"analogbindings\"\n\t{\n\t}\n}\n";
+    const string remoteVcfg = "\"config\"\n{\n\t\"bindings\"\n\t{\n\t\t\"T\"\t\t\"toggleradarscale\"\n\t\t\"F7\"\t\t\"load quick\"\n\t\t\"F10\"\t\t\"remote_quit\"\n\t}\n\t\"analogbindings\"\n\t{\n\t}\n}\n";
     File.WriteAllText(local, vcfg);
     File.WriteAllText(remote, remoteVcfg);
     File.WriteAllText(Path.Combine(cfg, "autoexec.cfg"), "echo keep\n");
@@ -61,6 +61,20 @@ try
     service.RemoveCreatedConfiguration();
     Assert(!File.Exists(Path.Combine(cfg, "autoexec.cfg")), "tool-created autoexec was not removed");
     Assert(!service.IsBindingApplied(out _), "binding status remained applied after removal");
+
+    service.ApplyBinding("F7");
+    settings.BoundKey = "T";
+    settings.SendKey = "T";
+    settings.OriginalBindings = new Dictionary<string, BindingSnapshot>(StringComparer.OrdinalIgnoreCase)
+    {
+        [Path.GetFullPath(local)] = new(true, "toggleradarscale"),
+        [Path.GetFullPath(remote)] = new(true, "toggleradarscale")
+    };
+    service.ApplyBinding("T");
+    Assert(File.ReadAllText(local).Contains("\"F7\"\t\t\"load quick\""), "orphaned F7 binding was not restored from initial backup");
+    Assert(File.ReadAllText(local).Contains("\"T\"\t\t\"exec sb6657_miao_send\""), "T binding was not applied after reconciliation");
+    service.RemoveCreatedConfiguration();
+    Assert(File.ReadAllText(local).Contains("\"T\"\t\t\"toggleradarscale\""), "T original binding was not restored after reconciliation");
 
     File.WriteAllText(Path.Combine(cfg, Cs2ConfigService.BindCfgName), "echo unrelated same name\n");
     var refused = false;
