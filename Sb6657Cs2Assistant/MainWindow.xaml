@@ -18,7 +18,7 @@
         <StackPanel Grid.Column="0"><TextBlock Foreground="#68747C" Text="助手状态"/><TextBlock x:Name="RunStatusText" FontSize="19" FontWeight="SemiBold" Text="已暂停"/></StackPanel>
         <StackPanel Grid.Column="1"><TextBlock Foreground="#68747C" Text="CS2 状态"/><TextBlock x:Name="GameStatusText" FontSize="19" FontWeight="SemiBold" Text="未运行"/></StackPanel>
         <StackPanel Grid.Column="2"><TextBlock Foreground="#68747C" Text="网络状态"/><TextBlock x:Name="NetworkStatusText" FontSize="19" FontWeight="SemiBold" Text="等待请求"/></StackPanel>
-        <StackPanel Grid.Column="3"><TextBlock Foreground="#68747C" Text="下次发送"/><TextBlock x:Name="CountdownText" FontSize="19" FontWeight="SemiBold" Text="--"/></StackPanel>
+        <StackPanel Grid.Column="3"><TextBlock Foreground="#68747C" Text="下次复制"/><TextBlock x:Name="CountdownText" FontSize="19" FontWeight="SemiBold" Text="--"/></StackPanel>
       </Grid>
     </Border>
 
@@ -26,9 +26,9 @@
       <StackPanel Orientation="Horizontal">
         <Button x:Name="StartButton" Content="启动" Click="Start_Click" Background="#167D6A" Foreground="White" BorderBrush="#167D6A"/>
         <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click" IsEnabled="False"/>
-        <Button Content="立即发送" Click="SendNow_Click"/>
+        <Button Content="立即复制" Click="SendNow_Click"/>
         <Button Content="刷新标签" Click="RefreshTags_Click"/>
-        <TextBlock x:Name="HotkeyHintText" Margin="12,8,0,0" Foreground="#68747C" Text="全局热键可切换启停；只有 CS2 位于前台时才发送。"/>
+        <TextBlock x:Name="HotkeyHintText" Margin="12,8,0,0" Foreground="#68747C" Text="启动后定时复制当前文本；请在游戏聊天框内粘贴并发送。"/>
       </StackPanel>
     </Border>
 
@@ -65,7 +65,7 @@
         <Border Grid.Row="1" Margin="0,12" Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="14">
           <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0"><TextBlock Foreground="#68747C" Text="命令触发"/><TextBlock x:Name="SuccessText" FontSize="18" Text="0"/></StackPanel>
+            <StackPanel Grid.Column="0"><TextBlock Foreground="#68747C" Text="复制/触发"/><TextBlock x:Name="SuccessText" FontSize="18" Text="0"/></StackPanel>
             <StackPanel Grid.Column="1"><TextBlock Foreground="#68747C" Text="跳过"/><TextBlock x:Name="SkippedText" FontSize="18" Text="0"/></StackPanel>
             <StackPanel Grid.Column="2"><TextBlock Foreground="#68747C" Text="失败"/><TextBlock x:Name="FailedText" FontSize="18" Text="0"/></StackPanel>
             <StackPanel Grid.Column="3"><TextBlock Foreground="#68747C" Text="重复重抽"/><TextBlock x:Name="RedrawnText" FontSize="18" Text="0"/></StackPanel>

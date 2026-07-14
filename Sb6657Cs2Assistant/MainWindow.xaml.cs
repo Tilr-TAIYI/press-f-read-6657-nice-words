@@ -99,7 +99,7 @@ public partial class MainWindow : Window
         menu.Items.Add("显示面板", null, (_, _) => Dispatcher.Invoke(ShowPanel));
         menu.Items.Add("启动", null, (_, _) => Dispatcher.Invoke(Start));
         menu.Items.Add("暂停", null, (_, _) => Dispatcher.Invoke(Pause));
-        menu.Items.Add("立即发送", null, (_, _) => Dispatcher.Invoke(() => _ = RunCycleAsync(true)));
+        menu.Items.Add("立即复制", null, (_, _) => Dispatcher.Invoke(() => _ = RunCycleAsync(true)));
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => Dispatcher.Invoke(ExitApplication));
         return menu;
@@ -138,16 +138,6 @@ public partial class MainWindow : Window
     private void Start()
     {
         SaveSettingsFromUi();
-        if (!_config.IsBindingApplied(out var bindingReason))
-        {
-            AddLog("无法启动发送：" + bindingReason);
-            System.Windows.MessageBox.Show(
-                bindingReason + "\n\n请完全退出 CS2，再点击“应用按键绑定”，成功后重新启动 CS2。",
-                "发送配置未生效",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
-        }
         _enabled = true;
         _remaining = Math.Clamp(_settings.IntervalSeconds, 10, 3600);
         RunStatusText.Text = "运行中";
@@ -155,7 +145,7 @@ public partial class MainWindow : Window
         StartButton.IsEnabled = false;
         PauseButton.IsEnabled = true;
         _tray.Text = "CS2 烂梗助手 - 运行中";
-        AddLog("自动发送已启动");
+        AddLog("定时复制已启动");
     }
 
     private void Pause()
@@ -166,7 +156,7 @@ public partial class MainWindow : Window
         StartButton.IsEnabled = true;
         PauseButton.IsEnabled = false;
         _tray.Text = "CS2 烂梗助手 - 已暂停";
-        AddLog("自动发送已暂停");
+        AddLog("定时复制已暂停");
     }
 
     private async Task RunCycleAsync(bool manual, bool allowSend = true)
@@ -189,35 +179,8 @@ public partial class MainWindow : Window
                 await FetchNextMemeAsync();
                 if (string.IsNullOrWhiteSpace(_currentMessage) || string.IsNullOrWhiteSpace(_currentMemeId)) return;
             }
-            if (manual && !_game.IsCs2Foreground)
-            {
-                AddLog("手动发送：正在激活 CS2 窗口");
-                if (!_game.TryFocusCs2())
-                {
-                    CountSkip("找不到可激活的 CS2 窗口");
-                    return;
-                }
-                await Task.Delay(300, _shutdown.Token);
-            }
-            if (!_game.IsCs2Foreground)
-            {
-                CountSkip($"当前 ID {_currentMemeId}，但 CS2 不在前台，未触发");
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(_settings.BoundKey) || !_settings.BoundKey.Equals(_settings.SendKey, StringComparison.OrdinalIgnoreCase))
-            {
-                CountFailure("发送键尚未安全写入 CS2 配置；请退出 CS2 后点击“应用按键绑定”");
-                return;
-            }
-            _config.WriteSendCommand(_currentMessage, _settings.ChatChannel);
-            var sent = await _game.TriggerBoundKeyAsync(_settings.SendKey, _shutdown.Token);
-            if (!sent)
-            {
-                CountSkip("发送前 CS2 失去焦点");
-                return;
-            }
-
-            RecordTriggeredCurrent(manual ? "手动" : "自动");
+            await SetClipboardTextWithRetryAsync(_currentMessage, _shutdown.Token);
+            RecordCopiedCurrent(manual ? "手动" : "定时");
             ResetCountdown();
             await FetchNextMemeAsync();
         }
@@ -258,6 +221,38 @@ public partial class MainWindow : Window
         AddHistory(_currentMessage, true);
         AddLog($"{source}触发 {(_settings.ChatChannel == "Team" ? "say_team" : "say")}，ID {_currentMemeId}");
         UpdateCounters();
+    }
+
+    private void RecordCopiedCurrent(string source)
+    {
+        if (string.IsNullOrWhiteSpace(_currentMessage) || string.IsNullOrWhiteSpace(_currentMemeId)) return;
+        _sentIds.Add(_currentMemeId);
+        _counters.Success++;
+        NetworkStatusText.Text = "正常";
+        AddHistory(_currentMessage, false);
+        AddLog($"{source}复制到剪贴板，ID {_currentMemeId}；请在游戏聊天框内粘贴并发送");
+        UpdateCounters();
+    }
+
+    private static async Task SetClipboardTextWithRetryAsync(string text, CancellationToken token)
+    {
+        const int attempts = 10;
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                System.Windows.Clipboard.SetDataObject(text, true);
+                return;
+            }
+            catch (COMException)
+            {
+                if (attempt == attempts) break;
+                await Task.Delay(40 * attempt, token);
+            }
+        }
+
+        throw new InvalidOperationException("剪贴板持续被其他程序占用，复制失败；请关闭剪贴板管理器或同步工具后重试");
     }
 
     private void ResetCountdown()
