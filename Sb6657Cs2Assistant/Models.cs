@@ -7,8 +7,7 @@ public sealed class AppSettings
 {
     public string ApiBaseUrl { get; set; } = "https://hguofichp.cn:10086";
     public int IntervalSeconds { get; set; } = 10;
-    public int RequestTimeoutSeconds { get; set; } = 3;
-    public string ChatKey { get; set; } = "Y";
+    public int RequestTimeoutSeconds { get; set; } = 10;
     public string SendKey { get; set; } = "F8";
     public string ChatChannel { get; set; } = "All";
     public string SteamPath { get; set; } = "";

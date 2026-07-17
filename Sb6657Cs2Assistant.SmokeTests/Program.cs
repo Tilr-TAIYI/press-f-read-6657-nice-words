@@ -76,6 +76,23 @@ try
     service.RemoveCreatedConfiguration();
     Assert(File.ReadAllText(local).Contains("\"T\"\t\t\"toggleradarscale\""), "T original binding was not restored after reconciliation");
 
+    var invalidKey = false;
+    try { service.ApplyBinding("F8\""); } catch (ArgumentException) { invalidKey = true; }
+    Assert(invalidKey, "invalid key text was accepted");
+
+    File.WriteAllText(Path.Combine(cfg, Cs2ConfigService.BindCfgName), "echo // SB6657_MIAO_MANAGED\nbind \"F8\" \"foreign\"\n");
+    var fakeMarkerRefused = false;
+    try { service.ApplyBinding("F9"); } catch (IOException) { fakeMarkerRefused = true; }
+    Assert(fakeMarkerRefused, "marker not on the first line was treated as ownership");
+    File.Delete(Path.Combine(cfg, Cs2ConfigService.BindCfgName));
+
+    var brokenStore = new SettingsStore(Path.Combine(root, "broken-settings"));
+    Directory.CreateDirectory(brokenStore.DirectoryPath);
+    File.WriteAllText(brokenStore.FilePath, "{ invalid json");
+    _ = brokenStore.Load();
+    Assert(!string.IsNullOrWhiteSpace(brokenStore.LastLoadError), "broken settings did not expose a load error");
+    Assert(Directory.GetFiles(brokenStore.DirectoryPath, "appsettings.json.corrupt.*").Length == 1, "broken settings were not backed up");
+
     File.WriteAllText(Path.Combine(cfg, Cs2ConfigService.BindCfgName), "echo unrelated same name\n");
     var refused = false;
     try { service.ApplyBinding("F8"); } catch (IOException) { refused = true; }
@@ -86,6 +103,28 @@ try
 finally
 {
     if (Directory.Exists(root)) Directory.Delete(root, true);
+}
+
+if (Environment.GetEnvironmentVariable("SB6657_NETWORK_SMOKE") == "1")
+{
+    using var client = new MemeApiClient("https://hguofichp.cn:10086", 10);
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+    var tags = await client.GetTagsAsync(timeout.Token);
+    Assert(tags.Count > 0, "network smoke returned no tags");
+    for (var i = 0; i < 5; i++)
+    {
+        var meme = await client.GetRandomAsync(timeout.Token);
+        Assert(meme is not null && !string.IsNullOrWhiteSpace(meme.Barrage), "network smoke returned no meme");
+    }
+    var selected = tags.Take(2).ToArray();
+    var queue = new MemeQueueService(client);
+    queue.Configure(tags, selected.Select(x => x.DictValue), string.Empty, 220);
+    var filtered = await queue.GetNextAsync(timeout.Token);
+    if (filtered is null) throw new InvalidOperationException("OR tag smoke returned no meme");
+    var resultTags = filtered.Tags.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    Assert(selected.Any(x => resultTags.Contains(x.DictValue, StringComparer.OrdinalIgnoreCase)), "OR tag smoke did not match any selected tag");
+    timeout.Cancel();
+    Console.WriteLine("network-smoke: PASS");
 }
 
 static void Assert(bool condition, string message)

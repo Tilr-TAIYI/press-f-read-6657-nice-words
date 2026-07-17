@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Interop;
@@ -17,14 +16,14 @@ public partial class MainWindow : Window
     private readonly SettingsStore _store = new();
     private readonly AppSettings _settings;
     private readonly MemeApiClient _api;
-    private readonly GameInputService _game = new();
+    private readonly Cs2RuntimeService _runtime = new();
     private readonly ObservableCollection<MemeTag> _tags = [];
     private readonly ObservableCollection<string> _logs = [];
     private readonly ObservableCollection<string> _history = [];
     private readonly InstallationService _installation = new();
     private readonly Cs2ConfigService _config;
     private readonly KeyboardMonitorService _keyboardMonitor = new();
-    private readonly HashSet<string> _sentIds = [];
+    private readonly MemeQueueService _memeQueue;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly DispatcherTimer _timer;
     private readonly Forms.NotifyIcon _tray;
@@ -32,7 +31,6 @@ public partial class MainWindow : Window
     private bool _enabled;
     private bool _exiting;
     private int _remaining;
-    private int? _filteredTotal;
     private readonly Counters _counters = new();
     private ICollectionView? _tagView;
     private bool _windowHookAdded;
@@ -47,7 +45,17 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _settings = _store.Load();
+        if (!string.IsNullOrWhiteSpace(_store.LastLoadError))
+            AddLog("配置文件损坏，已使用默认配置：" + _store.LastLoadError);
+        if (_settings.RequestTimeoutSeconds <= 3)
+        {
+            _settings.RequestTimeoutSeconds = 10;
+            TrySaveSettings("保存超时设置失败");
+        }
         _api = new MemeApiClient(_settings.ApiBaseUrl, _settings.RequestTimeoutSeconds);
+        _memeQueue = new MemeQueueService(_api);
+        _memeQueue.Prefetched += meme => { CacheStatusText.Text = "缓存：已准备"; AddLog($"已预取下一条，ID {meme.Id}"); };
+        _memeQueue.PrefetchFailed += ex => { CacheStatusText.Text = "缓存：暂不可用"; AddLog("预取失败（当前内容仍可用）：" + ex.Message); };
         _config = new Cs2ConfigService(_store, _settings);
         TagsList.ItemsSource = _tags;
         LogList.ItemsSource = _logs;
@@ -83,12 +91,12 @@ public partial class MainWindow : Window
             HotkeyBox.Text = _settings.ToggleHotkey;
             if (TryRegisterToggleHotkey())
             {
-                _store.Save(_settings);
+                TrySaveSettings("保存热键回退设置失败");
                 AddLog("原热键不可用，已自动改用 Ctrl+Shift+F10");
             }
         }
         await LoadTagsAsync();
-        await RunCycleAsync(false, false);
+        await InitializeCurrentAsync();
         if (_settings.StartEnabled) Start();
         AddLog("助手已启动，当前处于" + (_enabled ? "运行" : "暂停") + "状态");
     }
@@ -114,7 +122,7 @@ public partial class MainWindow : Window
 
     private void Timer_Tick(object? sender, EventArgs e)
     {
-        GameStatusText.Text = !_game.IsCs2Running ? "未运行" : _game.IsCs2Foreground ? "前台就绪" : "后台运行";
+        GameStatusText.Text = !_runtime.IsCs2Running ? "未运行" : _runtime.IsCs2Foreground ? "前台就绪" : "后台运行";
         if (!_enabled)
         {
             CountdownText.Text = "--";
@@ -139,6 +147,8 @@ public partial class MainWindow : Window
     {
         SaveSettingsFromUi();
         _enabled = true;
+        _settings.StartEnabled = true;
+        TrySaveSettings("保存启动状态失败");
         _remaining = Math.Clamp(_settings.IntervalSeconds, 10, 3600);
         RunStatusText.Text = "运行中";
         RunStatusText.Foreground = (System.Windows.Media.Brush)FindResource("AccentBrush");
@@ -151,6 +161,8 @@ public partial class MainWindow : Window
     private void Pause()
     {
         _enabled = false;
+        _settings.StartEnabled = false;
+        TrySaveSettings("保存暂停状态失败");
         RunStatusText.Text = "已暂停";
         RunStatusText.Foreground = System.Windows.Media.Brushes.Black;
         StartButton.IsEnabled = true;
@@ -159,7 +171,12 @@ public partial class MainWindow : Window
         AddLog("定时复制已暂停");
     }
 
-    private async Task RunCycleAsync(bool manual, bool allowSend = true)
+    private async Task InitializeCurrentAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_currentMessage)) await FetchNextMemeAsync();
+    }
+
+    private async Task RunCycleAsync(bool manual)
     {
         if (!await _sendLock.WaitAsync(0))
         {
@@ -169,11 +186,6 @@ public partial class MainWindow : Window
 
         try
         {
-            if (!allowSend)
-            {
-                await FetchNextMemeAsync();
-                return;
-            }
             if (string.IsNullOrWhiteSpace(_currentMessage) || string.IsNullOrWhiteSpace(_currentMemeId))
             {
                 await FetchNextMemeAsync();
@@ -181,6 +193,7 @@ public partial class MainWindow : Window
             }
             await SetClipboardTextWithRetryAsync(_currentMessage, _shutdown.Token);
             RecordCopiedCurrent(manual ? "手动" : "定时");
+            ClearCurrentContent();
             ResetCountdown();
             await FetchNextMemeAsync();
         }
@@ -198,24 +211,34 @@ public partial class MainWindow : Window
     private async Task FetchNextMemeAsync()
     {
         NetworkStatusText.Text = "正在请求";
-        var meme = await GetUniqueMemeAsync(_shutdown.Token);
-        if (meme is null) { CountFailure("接口未返回可用烂梗"); return; }
-        var message = Sanitize(_settings.ChatPrefix + meme.Barrage, _settings.MaxMessageLength);
-        if (string.IsNullOrWhiteSpace(message)) { CountFailure("文本清理后为空"); return; }
+        CacheStatusText.Text = "缓存：读取中";
+        var prepared = await _memeQueue.GetNextAsync(_shutdown.Token);
+        _counters.Redrawn = _memeQueue.RedrawnCount;
+        if (prepared is null) { CountFailure("接口未返回可用烂梗"); return; }
 
-        _currentMessage = message;
-        _currentMemeId = meme.Id;
-        CurrentMemeText.Text = message;
-        CurrentMetaText.Text = $"ID: {meme.Id}    候选数量: {(_filteredTotal?.ToString() ?? "全部")}";
+        _currentMessage = prepared.Text;
+        _currentMemeId = prepared.Id;
+        CurrentMemeText.Text = prepared.Text;
+        CurrentMetaText.Text = $"ID: {prepared.Id}    候选数量: {(prepared.CandidateTotal?.ToString() ?? "全部")}";
         NetworkStatusText.Text = "正常";
-        if (_config.IsBindingApplied(out _)) _config.WriteSendCommand(message, _settings.ChatChannel);
-        AddLog($"下一条已准备，ID {meme.Id}");
+        if (_config.IsBindingApplied(out _)) _config.WriteSendCommand(prepared.Text, _settings.ChatChannel);
+        AddLog($"下一条已准备，ID {prepared.Id}{(prepared.FromCache ? "（来自缓存）" : "")}");
+        CacheStatusText.Text = prepared.FromCache ? "缓存：已取用，正在补充" : "缓存：正在准备";
+    }
+
+    private void ClearCurrentContent()
+    {
+        _currentMessage = null;
+        _currentMemeId = null;
+        CurrentMemeText.Text = "等待获取 sb6657 烂梗";
+        CurrentMetaText.Text = "ID: --    候选数量: --";
+        CacheStatusText.Text = "缓存：未准备";
     }
 
     private void RecordTriggeredCurrent(string source)
     {
         if (string.IsNullOrWhiteSpace(_currentMessage) || string.IsNullOrWhiteSpace(_currentMemeId)) return;
-        _sentIds.Add(_currentMemeId);
+        _memeQueue.MarkConsumed(_currentMemeId);
         _counters.Success++;
         NetworkStatusText.Text = "正常";
         AddHistory(_currentMessage, true);
@@ -226,7 +249,7 @@ public partial class MainWindow : Window
     private void RecordCopiedCurrent(string source)
     {
         if (string.IsNullOrWhiteSpace(_currentMessage) || string.IsNullOrWhiteSpace(_currentMemeId)) return;
-        _sentIds.Add(_currentMemeId);
+        _memeQueue.MarkConsumed(_currentMemeId);
         _counters.Success++;
         NetworkStatusText.Text = "正常";
         AddHistory(_currentMessage, false);
@@ -265,13 +288,14 @@ public partial class MainWindow : Window
     {
         Dispatcher.BeginInvoke(async () =>
         {
-            if (!_game.IsCs2Foreground || !_config.IsBindingApplied(out _)) return;
+            if (!_enabled || !_runtime.IsCs2Foreground || !_config.IsBindingApplied(out _)) return;
             if (!await _sendLock.WaitAsync(0)) return;
             try
             {
                 if (string.IsNullOrWhiteSpace(_currentMessage) || string.IsNullOrWhiteSpace(_currentMemeId)) return;
                 await Task.Delay(250, _shutdown.Token);
                 RecordTriggeredCurrent("物理按键");
+                ClearCurrentContent();
                 ResetCountdown();
                 await FetchNextMemeAsync();
             }
@@ -279,49 +303,6 @@ public partial class MainWindow : Window
             catch (Exception ex) { CountFailure("物理发送后获取下一条失败：" + ex.Message); }
             finally { _sendLock.Release(); }
         });
-    }
-
-    private async Task<Meme?> GetUniqueMemeAsync(CancellationToken token)
-    {
-        var selected = _tags.Where(x => x.IsSelected).Select(x => x.DictValue).ToArray();
-        if (selected.Length == 0 || selected.Length == _tags.Count)
-        {
-            for (var attempt = 0; attempt < 8; attempt++)
-            {
-                var meme = await _api.GetRandomAsync(token);
-                if (meme is null || _sentIds.Contains(meme.Id)) { _counters.Redrawn++; continue; }
-                return meme;
-            }
-            return null;
-        }
-
-        var tagParam = string.Join(',', selected);
-        if (_filteredTotal is null)
-        {
-            var first = await _api.GetFilteredPageAsync(tagParam, 1, token);
-            _filteredTotal = first.Total;
-            if (_filteredTotal <= 0)
-                throw new InvalidOperationException("所选标签组合没有烂梗；多个标签要求内容同时包含这些标签");
-        }
-        if (_sentIds.Count >= _filteredTotal) _sentIds.Clear();
-
-        for (var attempt = 0; attempt < Math.Min(12, Math.Max(1, _filteredTotal.Value)); attempt++)
-        {
-            var page = Random.Shared.Next(1, _filteredTotal.Value + 1);
-            var result = await _api.GetFilteredPageAsync(tagParam, page, token);
-            _filteredTotal = result.Total;
-            if (result.Meme is null || _sentIds.Contains(result.Meme.Id)) { _counters.Redrawn++; continue; }
-            return result.Meme;
-        }
-        return null;
-    }
-
-    public static string Sanitize(string value, int maxLength)
-    {
-        var clean = Regex.Replace(value, @"[\x00-\x1F\x7F]+", " ");
-        clean = Regex.Replace(clean, @"\s+", " ").Trim();
-        var limit = Math.Clamp(maxLength, 20, 500);
-        return clean.Length <= limit ? clean : clean[..limit];
     }
 
     private async Task LoadTagsAsync()
@@ -340,6 +321,7 @@ public partial class MainWindow : Window
             }
             _tagView = CollectionViewSource.GetDefaultView(_tags);
             TagsList.ItemsSource = _tagView;
+            ConfigureMemeQueue();
             NetworkStatusText.Text = "正常";
             AddLog($"已加载 {_tags.Count} 个标签");
         }
@@ -372,10 +354,20 @@ public partial class MainWindow : Window
 
     private void ResetFilterState()
     {
-        _filteredTotal = null;
-        _sentIds.Clear();
+        _memeQueue.Reset();
+        ClearCurrentContent();
         _remaining = 1;
         CurrentMetaText.Text = "ID: --    候选数量: 待刷新";
+    }
+
+    private void ConfigureMemeQueue()
+    {
+        var changed = _memeQueue.Configure(
+            _tags.ToArray(),
+            _tags.Where(x => x.IsSelected).Select(x => x.DictValue),
+            _settings.ChatPrefix,
+            _settings.MaxMessageLength);
+        if (changed && IsLoaded && !string.IsNullOrWhiteSpace(_currentMessage)) ClearCurrentContent();
     }
 
     private void TagSearch_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -395,7 +387,7 @@ public partial class MainWindow : Window
             {
                 _settings.ToggleHotkey = oldHotkey;
                 HotkeyBox.Text = oldHotkey;
-                _store.Save(_settings);
+                TrySaveSettings("恢复原热键设置失败");
             }
         }
     }
@@ -426,7 +418,8 @@ public partial class MainWindow : Window
         _settings.ChatPrefix = PrefixBox.Text;
         _settings.SelectedTagValues = _tags.Where(x => x.IsSelected).Select(x => x.DictValue).ToList();
         _api.Configure(_settings.ApiBaseUrl, _settings.RequestTimeoutSeconds);
-        try { _store.Save(_settings); } catch (Exception ex) { AddLog("保存配置失败：" + ex.Message); }
+        ConfigureMemeQueue();
+        TrySaveSettings("保存配置失败");
     }
 
     private void RestorePosition()
@@ -454,6 +447,12 @@ public partial class MainWindow : Window
         while (_logs.Count > 200) _logs.RemoveAt(_logs.Count - 1);
     }
 
+    private void TrySaveSettings(string context)
+    {
+        try { _store.Save(_settings); }
+        catch (Exception ex) { AddLog($"{context}：{ex.Message}"); }
+    }
+
     private void ClearLog_Click(object sender, RoutedEventArgs e) => _logs.Clear();
 
     private void AddHistory(string text, bool triggered)
@@ -463,7 +462,8 @@ public partial class MainWindow : Window
         if (_settings.SendHistory.Count > 100) _settings.SendHistory.RemoveRange(100, _settings.SendHistory.Count - 100);
         _history.Insert(0, $"{entry.Time:MM-dd HH:mm:ss}  [{(entry.Channel == "Team" ? "队内" : "全体")}]  {entry.Text}");
         while (_history.Count > 100) _history.RemoveAt(_history.Count - 1);
-        _store.Save(_settings);
+        try { _store.Save(_settings); }
+        catch (Exception ex) { AddLog("保存发送历史失败：" + ex.Message); }
     }
 
     private void CaptureKey_Click(object sender, RoutedEventArgs e)
@@ -511,7 +511,7 @@ public partial class MainWindow : Window
         _settings.SteamUserId = info.SteamUserId;
         SteamPathBox.Text = info.SteamPath;
         Cs2PathBox.Text = info.Cs2Path;
-        _store.Save(_settings);
+        TrySaveSettings("保存路径失败");
         if (notify) AddLog($"已检测 CS2，Steam 用户 {_settings.SteamUserId}");
     }
 
@@ -522,7 +522,7 @@ public partial class MainWindow : Window
         _settings.SteamPath = dialog.SelectedPath;
         _settings.Cs2Path = _installation.DetectCs2Path(dialog.SelectedPath) ?? _settings.Cs2Path;
         _settings.SteamUserId = _installation.DetectSteamUser(dialog.SelectedPath) ?? _settings.SteamUserId;
-        SteamPathBox.Text = _settings.SteamPath; Cs2PathBox.Text = _settings.Cs2Path; _store.Save(_settings);
+        SteamPathBox.Text = _settings.SteamPath; Cs2PathBox.Text = _settings.Cs2Path; TrySaveSettings("保存 Steam 路径失败");
     }
 
     private void BrowseCs2_Click(object sender, RoutedEventArgs e)
@@ -531,7 +531,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
         _settings.Cs2Path = dialog.SelectedPath;
         Cs2PathBox.Text = _settings.Cs2Path;
-        _store.Save(_settings);
+        TrySaveSettings("保存 CS2 路径失败");
     }
 
     private void ApplyBinding_Click(object sender, RoutedEventArgs e)
@@ -590,7 +590,7 @@ public partial class MainWindow : Window
 
         if (_activeHotkeyId is not null && modifiers == _activeHotkeyModifiers && key == _activeHotkeyKey)
         {
-            HotkeyHintText.Text = $"热键 {_settings.ToggleHotkey} 可切换启停；只有 CS2 位于前台时才发送。";
+            HotkeyHintText.Text = $"热键 {_settings.ToggleHotkey} 可切换定时复制；实体键仅在 CS2 前台时生效。";
             return true;
         }
 
@@ -604,7 +604,7 @@ public partial class MainWindow : Window
         _activeHotkeyId = candidateId;
         _activeHotkeyModifiers = modifiers;
         _activeHotkeyKey = key;
-        HotkeyHintText.Text = $"热键 {_settings.ToggleHotkey} 可切换启停；只有 CS2 位于前台时才发送。";
+        HotkeyHintText.Text = $"热键 {_settings.ToggleHotkey} 可切换定时复制；实体键仅在 CS2 前台时生效。";
         AddLog($"启停热键已设为 {_settings.ToggleHotkey}");
         return true;
     }
@@ -641,6 +641,7 @@ public partial class MainWindow : Window
         {
             _shutdown.Cancel();
             _timer.Stop();
+            _api.Dispose();
             _keyboardMonitor.Dispose();
             if (_activeHotkeyId is int id) UnregisterHotKey(new WindowInteropHelper(this).Handle, id);
             _tray.Visible = false;

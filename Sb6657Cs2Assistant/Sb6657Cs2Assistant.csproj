@@ -8,10 +8,12 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Sb6657Cs2Assistant</AssemblyName>
     <RootNamespace>Sb6657Cs2Assistant</RootNamespace>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
   <ItemGroup>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </None>
   </ItemGroup>
 </Project>

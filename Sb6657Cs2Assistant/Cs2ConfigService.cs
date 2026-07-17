@@ -22,12 +22,18 @@ public sealed class Cs2ConfigService
         _enforceGameStopped = enforceGameStopped;
     }
 
-    public string CfgDirectory => Path.Combine(_settings.Cs2Path, "game", "csgo", "cfg");
+    public string CfgDirectory => string.IsNullOrWhiteSpace(_settings.Cs2Path)
+        ? string.Empty
+        : Path.GetFullPath(Path.Combine(_settings.Cs2Path, "game", "csgo", "cfg"));
 
     public IReadOnlyList<string> UserKeyFiles()
     {
-        if (string.IsNullOrWhiteSpace(_settings.SteamPath) || string.IsNullOrWhiteSpace(_settings.SteamUserId)) return [];
-        var root = Path.GetFullPath(Path.Combine(_settings.SteamPath, "userdata", _settings.SteamUserId, "730"));
+        if (string.IsNullOrWhiteSpace(_settings.SteamPath) ||
+            string.IsNullOrWhiteSpace(_settings.SteamUserId) ||
+            !_settings.SteamUserId.All(char.IsDigit)) return [];
+        var steamRoot = Path.GetFullPath(_settings.SteamPath);
+        var root = Path.GetFullPath(Path.Combine(steamRoot, "userdata", _settings.SteamUserId, "730"));
+        if (!IsUnder(root, steamRoot)) return [];
         return new[]
         {
             Path.Combine(root, "local", "cfg", "cs2_user_keys_0_slot0.vcfg"),
@@ -89,7 +95,7 @@ public sealed class Cs2ConfigService
         AdoptLegacySendCfgIfKnown();
         EnsureManagedOrMissing(target);
         var command = channel.Equals("Team", StringComparison.OrdinalIgnoreCase) ? "say_team" : "say";
-        var escaped = text.Replace("\\", "\\\\").Replace("\"", "'").Replace("\r", " ").Replace("\n", " ");
+        var escaped = EscapeCfgText(text);
         AtomicWrite(target, $"{ManagedMarker}\n{command} \"{escaped}\"\n");
     }
 
@@ -106,10 +112,10 @@ public sealed class Cs2ConfigService
             { reason = $"{Path.GetFileName(file)} 中没有 {_settings.BoundKey} 绑定"; return false; }
         }
         var bindCfg = Path.Combine(CfgDirectory, BindCfgName);
-        if (!File.Exists(bindCfg) || !File.ReadAllText(bindCfg).Contains(ManagedMarker, StringComparison.Ordinal))
+        if (!File.Exists(bindCfg) || !IsManagedFile(bindCfg))
         { reason = $"缺少 {BindCfgName}"; return false; }
         var autoexec = Path.Combine(CfgDirectory, "autoexec.cfg");
-        if (!File.Exists(autoexec) || !File.ReadAllText(autoexec).Contains(AutoexecMarker, StringComparison.Ordinal))
+        if (!File.Exists(autoexec) || !File.ReadLines(autoexec).Any(IsManagedAutoexecLine))
         { reason = "autoexec.cfg 尚未加载本工具绑定"; return false; }
         reason = "配置已应用";
         return true;
@@ -123,8 +129,7 @@ public sealed class Cs2ConfigService
         var managed = new[]
         {
             Path.Combine(CfgDirectory, BindCfgName),
-            Path.Combine(CfgDirectory, SendCfgName),
-            Path.Combine(CfgDirectory, SendCfgName + ".tmp")
+            Path.Combine(CfgDirectory, SendCfgName)
         };
         var affected = files.Append(Path.Combine(CfgDirectory, "autoexec.cfg")).Concat(managed).ToList();
         var disk = CaptureFiles(affected);
@@ -220,8 +225,8 @@ public sealed class Cs2ConfigService
         var path = Path.Combine(CfgDirectory, "autoexec.cfg");
         var existed = File.Exists(path);
         var text = existed ? File.ReadAllText(path) : "";
+        if (text.Split(["\r\n", "\n"], StringSplitOptions.None).Any(IsManagedAutoexecLine)) return;
         _settings.AutoexecCreatedByTool = !existed;
-        if (text.Contains(AutoexecMarker, StringComparison.Ordinal)) return;
         var line = $"exec {Path.GetFileNameWithoutExtension(BindCfgName)} {AutoexecMarker}";
         AtomicWrite(path, text + (text.Length == 0 || text.EndsWith('\n') ? "" : Environment.NewLine) + line + Environment.NewLine);
     }
@@ -230,7 +235,7 @@ public sealed class Cs2ConfigService
     {
         var path = Path.Combine(CfgDirectory, "autoexec.cfg");
         if (!File.Exists(path)) return;
-        var remaining = File.ReadAllLines(path).Where(x => !x.Contains(AutoexecMarker, StringComparison.Ordinal)).ToArray();
+        var remaining = File.ReadAllLines(path).Where(x => !IsManagedAutoexecLine(x)).ToArray();
         if (_settings.AutoexecCreatedByTool && remaining.All(string.IsNullOrWhiteSpace)) File.Delete(path);
         else AtomicWrite(path, string.Join(Environment.NewLine, remaining) + (remaining.Length > 0 ? Environment.NewLine : ""));
     }
@@ -269,7 +274,15 @@ public sealed class Cs2ConfigService
 
     private void ValidateInstallation(bool requireUserKeys)
     {
-        var cs2Exe = Path.Combine(_settings.Cs2Path, "game", "bin", "win64", "cs2.exe");
+        if (string.IsNullOrWhiteSpace(_settings.Cs2Path) || string.IsNullOrWhiteSpace(_settings.SteamPath))
+            throw new DirectoryNotFoundException("请先选择有效的 Steam 和 CS2 安装目录");
+        var cs2Root = Path.GetFullPath(_settings.Cs2Path);
+        var steamRoot = Path.GetFullPath(_settings.SteamPath);
+        var cs2Exe = Path.Combine(cs2Root, "game", "bin", "win64", "cs2.exe");
+        if (!IsUnder(CfgDirectory, cs2Root))
+            throw new InvalidOperationException("CFG 目录不在选定的 CS2 安装目录内，已拒绝写入");
+        if (!IsUnder(Path.GetFullPath(Path.Combine(steamRoot, "userdata")), steamRoot))
+            throw new InvalidOperationException("Steam 用户目录无效，已拒绝写入");
         if (string.IsNullOrWhiteSpace(_settings.Cs2Path) || !File.Exists(cs2Exe) || !Directory.Exists(CfgDirectory))
             throw new DirectoryNotFoundException("CS2 安装目录无效");
         if (requireUserKeys && UserKeyFiles().Count == 0)
@@ -284,7 +297,7 @@ public sealed class Cs2ConfigService
 
     private static void EnsureManagedOrMissing(string path)
     {
-        if (File.Exists(path) && !File.ReadAllText(path).Contains(ManagedMarker, StringComparison.Ordinal))
+        if (File.Exists(path) && !IsManagedFile(path))
             throw new IOException($"文件 {Path.GetFileName(path)} 已存在但不是本工具创建，已拒绝覆盖");
     }
 
@@ -293,7 +306,7 @@ public sealed class Cs2ConfigService
         var path = Path.Combine(CfgDirectory, SendCfgName);
         if (!File.Exists(path)) return;
         var text = File.ReadAllText(path);
-        if (text.Contains(ManagedMarker, StringComparison.Ordinal)) return;
+        if (IsManagedFile(path)) return;
         var isLegacyShape = Regex.IsMatch(text, "^\\s*(say|say_team)\\s+\\\"[^\\r\\n]*\\\"\\s*$", RegexOptions.IgnoreCase);
         if (!isLegacyShape || _settings.SendHistory.Count == 0) return;
         var backupDir = Path.Combine(_store.DirectoryPath, "backups");
@@ -306,7 +319,7 @@ public sealed class Cs2ConfigService
     private static void DeleteOnlyManagedFile(string path)
     {
         if (!File.Exists(path)) return;
-        if (!File.ReadAllText(path).Contains(ManagedMarker, StringComparison.Ordinal))
+        if (!IsManagedFile(path))
             throw new IOException($"文件 {Path.GetFileName(path)} 不含所有权标记，已拒绝删除");
         File.Delete(path);
     }
@@ -347,12 +360,55 @@ public sealed class Cs2ConfigService
     private static void AtomicWrite(string path, string content)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temporary = path + ".sb6657_write_tmp";
-        File.WriteAllText(temporary, content, new UTF8Encoding(false));
-        File.Move(temporary, path, true);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".sb6657.tmp";
+        try
+        {
+            File.WriteAllText(temporary, content, new UTF8Encoding(false));
+            File.Move(temporary, path, true);
+        }
+        finally
+        {
+            try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+        }
     }
 
-    private static string NormalizeKey(string key) => string.IsNullOrWhiteSpace(key) ? "F8" : key.Trim().ToUpperInvariant();
+    private static string NormalizeKey(string key)
+    {
+        var normalized = string.IsNullOrWhiteSpace(key) ? "F8" : key.Trim().ToUpperInvariant();
+        if (normalized.Length > 24 || !Regex.IsMatch(normalized, "^[A-Z0-9_]+$"))
+            throw new ArgumentException("发送键名称无效，只允许字母、数字和下划线");
+        return normalized;
+    }
+
+    private static string EscapeCfgText(string text)
+    {
+        var clean = Regex.Replace(text ?? string.Empty, @"[\x00-\x1F\x7F]+", " ");
+        clean = clean.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "'", StringComparison.Ordinal);
+        return clean.Length <= 500 ? clean : clean[..500];
+    }
+
+    private static bool IsManagedFile(string path)
+    {
+        if (!File.Exists(path)) return false;
+        var first = File.ReadLines(path).FirstOrDefault();
+        return string.Equals(first?.Trim(), ManagedMarker, StringComparison.Ordinal);
+    }
+
+    private static bool IsManagedAutoexecLine(string line)
+    {
+        var trimmed = line.Trim();
+        return Regex.IsMatch(
+            trimmed,
+            "^exec\\s+" + Regex.Escape(Path.GetFileNameWithoutExtension(BindCfgName)) + "\\s+" + Regex.Escape(AutoexecMarker) + "$",
+            RegexOptions.IgnoreCase);
+    }
+
+    private static bool IsUnder(string path, string root)
+    {
+        var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
+    }
 
     private sealed record SettingsState(
         string BoundKey,

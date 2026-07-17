@@ -28,7 +28,7 @@
         <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click" IsEnabled="False"/>
         <Button Content="立即复制" Click="SendNow_Click"/>
         <Button Content="刷新标签" Click="RefreshTags_Click"/>
-        <TextBlock x:Name="HotkeyHintText" Margin="12,8,0,0" Foreground="#68747C" Text="启动后定时复制当前文本；请在游戏聊天框内粘贴并发送。"/>
+        <TextBlock x:Name="HotkeyHintText" Margin="12,8,0,0" Foreground="#68747C" Text="启动后定时复制；请在游戏聊天框内粘贴并发送。"/>
       </StackPanel>
     </Border>
 
@@ -37,7 +37,7 @@
       <Border Grid.Column="0" Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="14">
         <Grid>
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-          <TextBlock FontSize="16" FontWeight="SemiBold" Text="标签筛选"/>
+          <TextBlock FontSize="16" FontWeight="SemiBold" Text="标签筛选（满足任一标签）"/>
           <TextBox x:Name="TagSearchBox" Grid.Row="1" Margin="0,10" TextChanged="TagSearch_TextChanged" ToolTip="搜索标签"/>
           <ListBox x:Name="TagsList" Grid.Row="2" BorderThickness="0" ScrollViewer.VerticalScrollBarVisibility="Auto">
             <ListBox.ItemTemplate>
@@ -60,6 +60,7 @@
             <TextBlock FontSize="16" FontWeight="SemiBold" Text="当前内容"/>
             <TextBlock x:Name="CurrentMemeText" Margin="0,10,0,5" FontSize="17" TextWrapping="Wrap" Text="等待获取sb6657烂梗"/>
             <TextBlock x:Name="CurrentMetaText" Foreground="#68747C" Text="ID: --    候选数量: --"/>
+            <TextBlock x:Name="CacheStatusText" Margin="0,4,0,0" Foreground="#68747C" Text="缓存：未准备"/>
           </StackPanel>
         </Border>
         <Border Grid.Row="1" Margin="0,12" Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="14">
