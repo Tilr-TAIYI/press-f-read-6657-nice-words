@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private uint _activeHotkeyModifiers;
     private uint _activeHotkeyKey;
     private bool _capturingSendKey;
+    private bool _keyboardMonitorSubscribed;
     private string? _currentMessage;
     private string? _currentMemeId;
 
@@ -81,10 +82,7 @@ public partial class MainWindow : Window
     {
         RestorePosition();
         DetectInstallation(false);
-        _keyboardMonitor.SetWatchedKey(_settings.SendKey);
-        _keyboardMonitor.WatchedKeyReleased += PhysicalSendKeyReleased;
-        try { _keyboardMonitor.Start(); }
-        catch (Exception ex) { AddLog("发送键监听启动失败：" + ex.Message); }
+        if (_config.IsBindingApplied(out _)) StartKeyboardMonitor();
         if (!TryRegisterToggleHotkey())
         {
             _settings.ToggleHotkey = "Ctrl+Shift+F10";
@@ -138,7 +136,13 @@ public partial class MainWindow : Window
         CountdownText.Text = $"{_remaining} 秒";
     }
 
-    private void Start_Click(object sender, RoutedEventArgs e) => Start();
+    private void Start_Click(object sender, RoutedEventArgs e)
+    {
+        // Re-run discovery on the action so a Steam/CS2 update is picked up
+        // without asking the user to edit a path or restart Windows.
+        DetectInstallation(false);
+        Start();
+    }
     private void Pause_Click(object sender, RoutedEventArgs e) => Pause();
     private void SendNow_Click(object sender, RoutedEventArgs e) => _ = RunCycleAsync(true);
     private async void RefreshTags_Click(object sender, RoutedEventArgs e) => await LoadTagsAsync();
@@ -539,15 +543,35 @@ public partial class MainWindow : Window
         try
         {
             _config.ApplyBinding(_settings.SendKey);
-            _keyboardMonitor.SetWatchedKey(_settings.SendKey);
+            StartKeyboardMonitor();
             if (!string.IsNullOrWhiteSpace(_currentMessage)) _config.WriteSendCommand(_currentMessage, _settings.ChatChannel);
             AddLog($"已绑定 {_settings.SendKey} -> exec {Cs2ConfigService.SendCfgName}");
-            System.Windows.MessageBox.Show("按键配置写入成功。现在可以启动 CS2，再点击“启动”。", "配置成功", MessageBoxButton.OK, MessageBoxImage.Information);
+            System.Windows.MessageBox.Show("按键配置写入成功。现在可以启动 CS2，再点击“一键启动”。", "配置成功", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
             CountFailure("应用绑定失败：" + ex.Message);
             System.Windows.MessageBox.Show(ex.Message, "配置写入失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void StartKeyboardMonitor()
+    {
+        _keyboardMonitor.SetWatchedKey(_settings.SendKey);
+        if (!_keyboardMonitorSubscribed)
+        {
+            _keyboardMonitor.WatchedKeyReleased += PhysicalSendKeyReleased;
+            _keyboardMonitorSubscribed = true;
+        }
+        if (_keyboardMonitor.IsRunning) return;
+        try
+        {
+            _keyboardMonitor.Start();
+            AddLog($"已启用 {_settings.SendKey} 实体按键监听（仅 CS2 前台且已应用绑定时处理）");
+        }
+        catch (Exception ex)
+        {
+            AddLog("发送键监听启动失败，仍可使用剪贴板模式：" + ex.Message);
         }
     }
 
@@ -559,7 +583,7 @@ public partial class MainWindow : Window
 
     private void RemoveCfg_Click(object sender, RoutedEventArgs e)
     {
-        try { _config.RemoveCreatedConfiguration(); AddLog("已恢复原按键并删除本工具创建的 CFG"); }
+        try { _config.RemoveCreatedConfiguration(); _keyboardMonitor.Stop(); AddLog("已恢复原按键并删除本工具创建的 CFG；实体按键监听已关闭"); }
         catch (Exception ex) { CountFailure("删除 CFG 失败：" + ex.Message); }
     }
 

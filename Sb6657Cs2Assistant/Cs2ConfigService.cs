@@ -22,9 +22,7 @@ public sealed class Cs2ConfigService
         _enforceGameStopped = enforceGameStopped;
     }
 
-    public string CfgDirectory => string.IsNullOrWhiteSpace(_settings.Cs2Path)
-        ? string.Empty
-        : Path.GetFullPath(Path.Combine(_settings.Cs2Path, "game", "csgo", "cfg"));
+    public string CfgDirectory => ResolveCfgDirectory();
 
     public IReadOnlyList<string> UserKeyFiles()
     {
@@ -34,11 +32,43 @@ public sealed class Cs2ConfigService
         var steamRoot = Path.GetFullPath(_settings.SteamPath);
         var root = Path.GetFullPath(Path.Combine(steamRoot, "userdata", _settings.SteamUserId, "730"));
         if (!IsUnder(root, steamRoot)) return [];
-        return new[]
+        var files = new List<string>();
+        foreach (var folder in new[] { "local", "remote" })
         {
-            Path.Combine(root, "local", "cfg", "cs2_user_keys_0_slot0.vcfg"),
-            Path.Combine(root, "remote", "cs2_user_keys.vcfg")
-        }.Where(File.Exists).Select(Path.GetFullPath).ToList();
+            var cfg = Path.Combine(root, folder, "cfg");
+            if (!Directory.Exists(cfg)) continue;
+            try
+            {
+                // Valve has changed slot suffixes across updates; only accept the
+                // narrowly scoped CS2 user-key naming pattern.
+                files.AddRange(Directory.EnumerateFiles(cfg, "cs2_user_keys*.vcfg", SearchOption.TopDirectoryOnly));
+            }
+            catch (UnauthorizedAccessException) { }
+        }
+        return files.Distinct(StringComparer.OrdinalIgnoreCase).Select(Path.GetFullPath).ToList();
+    }
+
+    private string ResolveCfgDirectory()
+    {
+        if (string.IsNullOrWhiteSpace(_settings.Cs2Path)) return string.Empty;
+        var root = Path.GetFullPath(_settings.Cs2Path);
+        var known = Path.Combine(root, "game", "csgo", "cfg");
+        if (Directory.Exists(known)) return known;
+
+        // Keep working if a future update moves the cfg folder inside game/.
+        // The fallback stays under the selected CS2 root and prefers a csgo folder.
+        var game = Path.Combine(root, "game");
+        if (!Directory.Exists(game)) return known;
+        try
+        {
+            var candidate = Directory.EnumerateDirectories(game, "cfg", SearchOption.AllDirectories)
+                .Where(path => string.Equals(Path.GetFileName(Path.GetDirectoryName(path)), "csgo", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path.Length)
+                .FirstOrDefault();
+            return candidate is null ? known : Path.GetFullPath(candidate);
+        }
+        catch (IOException) { return known; }
+        catch (UnauthorizedAccessException) { return known; }
     }
 
     public void ApplyBinding(string newKey)

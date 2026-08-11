@@ -24,11 +24,11 @@
 
     <Border Grid.Row="1" Margin="0,12" Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="14">
       <StackPanel Orientation="Horizontal">
-        <Button x:Name="StartButton" Content="启动" Click="Start_Click" Background="#167D6A" Foreground="White" BorderBrush="#167D6A"/>
+        <Button x:Name="StartButton" Content="一键启动" Click="Start_Click" Background="#167D6A" Foreground="White" BorderBrush="#167D6A"/>
         <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click" IsEnabled="False"/>
         <Button Content="立即复制" Click="SendNow_Click"/>
         <Button Content="刷新标签" Click="RefreshTags_Click"/>
-        <TextBlock x:Name="HotkeyHintText" Margin="12,8,0,0" Foreground="#68747C" Text="启动后定时复制；请在游戏聊天框内粘贴并发送。"/>
+        <TextBlock x:Name="HotkeyHintText" Margin="12,8,0,0" Foreground="#68747C" Text="双击 EXE 即可使用；启动后复制内容，在 CS2 聊天框粘贴发送。"/>
       </StackPanel>
     </Border>
 
@@ -89,26 +89,29 @@
     </Grid>
 
     <Border Grid.Row="3" Margin="0,12,0,0" Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="10">
-      <StackPanel>
-        <WrapPanel>
-          <TextBlock Margin="4,5" Text="间隔(秒，≥10)"/><TextBox x:Name="IntervalBox" Width="48" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
-          <TextBlock Margin="4,5" Text="超时(秒)"/><TextBox x:Name="TimeoutBox" Width="48" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
-          <TextBlock Margin="4,5" Text="发送键"/><Button x:Name="CaptureKeyButton" Content="F8" Width="75" Click="CaptureKey_Click"/>
-          <TextBlock Margin="4,5" Text="频道"/><ComboBox x:Name="ChannelBox" Width="95" Margin="5,0,14,0" SelectionChanged="Channel_Changed"><ComboBoxItem Content="全体聊天" Tag="All"/><ComboBoxItem Content="队内聊天" Tag="Team"/></ComboBox>
-          <TextBlock Margin="4,5" Text="启停热键"/><TextBox x:Name="HotkeyBox" Width="105" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
-          <TextBlock Margin="4,5" Text="前缀"/><TextBox x:Name="PrefixBox" Width="110" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
-          <TextBlock Margin="4,5" Text="最大长度"/><TextBox x:Name="MaxLengthBox" Width="58" Margin="5,0" LostFocus="Settings_LostFocus"/>
-        </WrapPanel>
-        <WrapPanel Margin="0,8,0,0">
-          <TextBlock Margin="4,5" Text="Steam"/><TextBox x:Name="SteamPathBox" Width="210" Margin="5,0" IsReadOnly="True"/>
-          <Button Content="自动检测" Click="DetectInstall_Click"/><Button Content="选择 Steam" Click="BrowseSteam_Click"/>
-          <TextBlock Margin="4,5" Text="CS2"/><TextBox x:Name="Cs2PathBox" Width="250" Margin="5,0" IsReadOnly="True"/>
-          <Button Content="选择 CS2" Click="BrowseCs2_Click"/>
-          <Button Content="应用按键绑定" Click="ApplyBinding_Click"/>
-          <Button Content="测试接口" Click="TestApi_Click"/>
-          <Button Content="删除本工具 CFG" Click="RemoveCfg_Click"/>
-        </WrapPanel>
-      </StackPanel>
+      <Expander IsExpanded="False">
+        <Expander.Header><TextBlock Text="高级设置（可选）" FontWeight="SemiBold"/></Expander.Header>
+        <StackPanel Margin="0,10,0,0">
+          <WrapPanel>
+            <TextBlock Margin="4,5" Text="间隔(秒，≥10)"/><TextBox x:Name="IntervalBox" Width="48" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
+            <TextBlock Margin="4,5" Text="超时(秒)"/><TextBox x:Name="TimeoutBox" Width="48" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
+            <TextBlock Margin="4,5" Text="发送键"/><Button x:Name="CaptureKeyButton" Content="F8" Width="75" Click="CaptureKey_Click"/>
+            <TextBlock Margin="4,5" Text="频道"/><ComboBox x:Name="ChannelBox" Width="95" Margin="5,0,14,0" SelectionChanged="Channel_Changed"><ComboBoxItem Content="全体聊天" Tag="All"/><ComboBoxItem Content="队内聊天" Tag="Team"/></ComboBox>
+            <TextBlock Margin="4,5" Text="启停热键"/><TextBox x:Name="HotkeyBox" Width="105" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
+            <TextBlock Margin="4,5" Text="前缀"/><TextBox x:Name="PrefixBox" Width="110" Margin="5,0,14,0" LostFocus="Settings_LostFocus"/>
+            <TextBlock Margin="4,5" Text="最大长度"/><TextBox x:Name="MaxLengthBox" Width="58" Margin="5,0" LostFocus="Settings_LostFocus"/>
+          </WrapPanel>
+          <WrapPanel Margin="0,8,0,0">
+            <TextBlock Margin="4,5" Text="Steam"/><TextBox x:Name="SteamPathBox" Width="210" Margin="5,0" IsReadOnly="True"/>
+            <Button Content="自动检测" Click="DetectInstall_Click"/><Button Content="选择 Steam" Click="BrowseSteam_Click"/>
+            <TextBlock Margin="4,5" Text="CS2"/><TextBox x:Name="Cs2PathBox" Width="250" Margin="5,0" IsReadOnly="True"/>
+            <Button Content="选择 CS2" Click="BrowseCs2_Click"/>
+            <Button Content="应用按键绑定" Click="ApplyBinding_Click"/>
+            <Button Content="测试接口" Click="TestApi_Click"/>
+            <Button Content="删除本工具 CFG" Click="RemoveCfg_Click"/>
+          </WrapPanel>
+        </StackPanel>
+      </Expander>
     </Border>
   </Grid>
 </Window>

@@ -15,6 +15,8 @@ public sealed class KeyboardMonitorService : IDisposable
 
     public event Action? WatchedKeyReleased;
 
+    public bool IsRunning => _hook != IntPtr.Zero;
+
     public KeyboardMonitorService() => _callback = HookCallback;
 
     public void Start()
@@ -42,6 +44,11 @@ public sealed class KeyboardMonitorService : IDisposable
     }
 
     public void Dispose()
+    {
+        Stop();
+    }
+
+    public void Stop()
     {
         if (_hook != IntPtr.Zero) UnhookWindowsHookEx(_hook);
         _hook = IntPtr.Zero;
