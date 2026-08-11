@@ -8,8 +8,8 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Sb6657Cs2Assistant</AssemblyName>
     <RootNamespace>Sb6657Cs2Assistant</RootNamespace>
-    <Version>1.2.0</Version>
-    <FileVersion>1.2.0.0</FileVersion>
+    <Version>1.2.1</Version>
+    <FileVersion>1.2.1.0</FileVersion>
     <Product>CS2 烂梗助手</Product>
     <Description>安全、免配置的 CS2 聊天剪贴板助手</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>

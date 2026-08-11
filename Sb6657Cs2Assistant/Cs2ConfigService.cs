@@ -33,9 +33,27 @@ public sealed class Cs2ConfigService
         var root = Path.GetFullPath(Path.Combine(steamRoot, "userdata", _settings.SteamUserId, "730"));
         if (!IsUnder(root, steamRoot)) return [];
         var files = new List<string>();
-        foreach (var folder in new[] { "local", "remote" })
+        var localCfg = Path.Combine(root, "local", "cfg");
+        if (Directory.Exists(localCfg))
         {
-            var cfg = Path.Combine(root, folder, "cfg");
+            try
+            {
+                var localFiles = Directory.EnumerateFiles(localCfg, "cs2_user_keys*.vcfg", SearchOption.TopDirectoryOnly).ToList();
+                var activeLocal = localFiles.FirstOrDefault(path => Path.GetFileName(path).Equals("cs2_user_keys_0_slot0.vcfg", StringComparison.OrdinalIgnoreCase))
+                    ?? localFiles.FirstOrDefault(path => Path.GetFileNameWithoutExtension(path).EndsWith("_slot0", StringComparison.OrdinalIgnoreCase))
+                    ?? localFiles.OrderByDescending(SafeLastWriteTimeUtc).FirstOrDefault();
+                if (activeLocal is not null) files.Add(activeLocal);
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
+        }
+
+        foreach (var cfg in new[]
+        {
+            Path.Combine(root, "remote"),
+            Path.Combine(root, "remote", "cfg")
+        })
+        {
             if (!Directory.Exists(cfg)) continue;
             try
             {
@@ -44,8 +62,15 @@ public sealed class Cs2ConfigService
                 files.AddRange(Directory.EnumerateFiles(cfg, "cs2_user_keys*.vcfg", SearchOption.TopDirectoryOnly));
             }
             catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
         }
         return files.Distinct(StringComparer.OrdinalIgnoreCase).Select(Path.GetFullPath).ToList();
+    }
+
+    private static DateTime SafeLastWriteTimeUtc(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path); }
+        catch { return DateTime.MinValue; }
     }
 
     private string ResolveCfgDirectory()
@@ -135,19 +160,22 @@ public sealed class Cs2ConfigService
         var expected = $"exec {Path.GetFileNameWithoutExtension(SendCfgName)}";
         var files = UserKeyFiles();
         if (files.Count == 0) { reason = "未找到当前 Steam 用户按键配置"; return false; }
-        foreach (var file in files)
+        var matchingFiles = files.Count(file =>
         {
             var binding = ReadBinding(file, _settings.BoundKey);
-            if (!binding.Existed || !expected.Equals(binding.Command, StringComparison.OrdinalIgnoreCase))
-            { reason = $"{Path.GetFileName(file)} 中没有 {_settings.BoundKey} 绑定"; return false; }
-        }
+            return binding.Existed && expected.Equals(binding.Command, StringComparison.OrdinalIgnoreCase);
+        });
+        if (matchingFiles == 0)
+        { reason = $"键位文件中没有 {_settings.BoundKey} 绑定"; return false; }
         var bindCfg = Path.Combine(CfgDirectory, BindCfgName);
         if (!File.Exists(bindCfg) || !IsManagedFile(bindCfg))
         { reason = $"缺少 {BindCfgName}"; return false; }
         var autoexec = Path.Combine(CfgDirectory, "autoexec.cfg");
         if (!File.Exists(autoexec) || !File.ReadLines(autoexec).Any(IsManagedAutoexecLine))
         { reason = "autoexec.cfg 尚未加载本工具绑定"; return false; }
-        reason = "配置已应用";
+        reason = matchingFiles == files.Count
+            ? "配置已应用"
+            : $"配置已应用（{matchingFiles}/{files.Count} 个 Steam 配置副本有效）";
         return true;
     }
 

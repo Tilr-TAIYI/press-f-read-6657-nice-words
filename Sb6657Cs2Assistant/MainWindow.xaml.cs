@@ -81,7 +81,7 @@ public partial class MainWindow : Window
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         RestorePosition();
-        DetectInstallation(false);
+        InitializeInstallation();
         if (_config.IsBindingApplied(out _)) StartKeyboardMonitor();
         if (!TryRegisterToggleHotkey())
         {
@@ -136,13 +136,7 @@ public partial class MainWindow : Window
         CountdownText.Text = $"{_remaining} 秒";
     }
 
-    private void Start_Click(object sender, RoutedEventArgs e)
-    {
-        // Re-run discovery on the action so a Steam/CS2 update is picked up
-        // without asking the user to edit a path or restart Windows.
-        DetectInstallation(false);
-        Start();
-    }
+    private void Start_Click(object sender, RoutedEventArgs e) => Start();
     private void Pause_Click(object sender, RoutedEventArgs e) => Pause();
     private void SendNow_Click(object sender, RoutedEventArgs e) => _ = RunCycleAsync(true);
     private async void RefreshTags_Click(object sender, RoutedEventArgs e) => await LoadTagsAsync();
@@ -506,17 +500,33 @@ public partial class MainWindow : Window
 
     private void DetectInstall_Click(object sender, RoutedEventArgs e) => DetectInstallation(true);
 
+    private void InitializeInstallation()
+    {
+        var info = _installation.ResolveSaved(_settings.SteamPath, _settings.Cs2Path, _settings.SteamUserId);
+        if (info is not null)
+        {
+            ApplyInstallation(info);
+            return;
+        }
+        DetectInstallation(false);
+    }
+
     private void DetectInstallation(bool notify)
     {
         var info = _installation.Detect();
         if (info is null) { if (notify) AddLog("未自动检测到 Steam/CS2，请手动选择"); return; }
+        ApplyInstallation(info);
+        if (notify) AddLog($"已检测 CS2，Steam 用户 {_settings.SteamUserId}");
+    }
+
+    private void ApplyInstallation(InstallationInfo info)
+    {
         _settings.SteamPath = info.SteamPath;
         _settings.Cs2Path = info.Cs2Path;
         _settings.SteamUserId = info.SteamUserId;
         SteamPathBox.Text = info.SteamPath;
         Cs2PathBox.Text = info.Cs2Path;
         TrySaveSettings("保存路径失败");
-        if (notify) AddLog($"已检测 CS2，Steam 用户 {_settings.SteamUserId}");
     }
 
     private void BrowseSteam_Click(object sender, RoutedEventArgs e)
@@ -533,7 +543,13 @@ public partial class MainWindow : Window
     {
         using var dialog = new Forms.FolderBrowserDialog { Description = "选择 Counter-Strike Global Offensive 根目录", UseDescriptionForTitle = true };
         if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
-        _settings.Cs2Path = dialog.SelectedPath;
+        var resolved = _installation.ResolveCs2Path(dialog.SelectedPath);
+        if (resolved is null)
+        {
+            System.Windows.MessageBox.Show("所选目录中未找到 game\\bin\\win64\\cs2.exe，请选择 CS2 安装根目录。", "CS2 目录无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        _settings.Cs2Path = resolved;
         Cs2PathBox.Text = _settings.Cs2Path;
         TrySaveSettings("保存 CS2 路径失败");
     }
